@@ -32,7 +32,19 @@ class EZPZ_BBCode_Parser {
       const finalPattern = escapedPattern.replace(/__CAPTURE([0-9]+)__/g, "([\\s\\S]*?)");
       const pattern = new RegExp(finalPattern, "gi");
 
-      const wrappedReplace = typeof replace === "function" ? (...args) => replace(args.slice(1)) : replace;
+      const wrappedReplace =
+        typeof replace === "function"
+          ? (...args) => {
+              const [match, ...rest] = args;
+              const groupCount = rest.length - 2;
+              return replace({
+                match: match,
+                content: rest.slice(0, groupCount),
+                index: rest[groupCount],
+                input: rest[groupCount + 1],
+              });
+            }
+          : replace;
 
       return {
         pattern,
