@@ -57,3 +57,9 @@ class EZPZ_BBCode_Parser {
     this.rules.push(...this.compile([rule]));
   }
 }
+
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = EZPZ_BBCode_Parser;
+} else {
+  window.EZPZ_BBCode_Parser = EZPZ_BBCode_Parser;
+}
