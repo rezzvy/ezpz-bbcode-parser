@@ -6,6 +6,83 @@ class EZPZ_BBCode_Parser {
     this.lineBreakTemplate = null;
   }
 
+  wrapNodeText(inputText, inlineTags, recursiveBlockTags) {
+    const INLINE_TAGS = inlineTags || ["b", "i", "u", "s", "url", "img", "color", "size"];
+    const RECURSIVE_BLOCK_TAGS = recursiveBlockTags || ["spoiler", "quote", "notice", "centre", "box"];
+
+    const NEWLINE = "<<<NEWLINE>>>";
+    inputText = inputText.replace(/\r?\n/g, NEWLINE);
+
+    const blockTagRegex = new RegExp(`\\[(${RECURSIVE_BLOCK_TAGS.join("|")})(=([^\\[\\]]|\\[[^\\[\\]]*\\])*)?\\]([\\s\\S]*?)\\[\\/\\1\\]`, "gi");
+
+    // Recursively wrap block tag content
+    inputText = inputText.replace(blockTagRegex, (_, tag, attr = "", __, content) => {
+      const inner = this.wrapNodeText(content.replaceAll(NEWLINE, "\n"), INLINE_TAGS, RECURSIVE_BLOCK_TAGS);
+      return `[${tag}${attr}]${inner}[/${tag}]`;
+    });
+
+    const isInlineOnly = (line) => {
+      if (!line.trim() || /^\s*\[\*\]/.test(line)) return false;
+      const tags = [...line.matchAll(/\[\/?([a-zA-Z0-9*]+)[^\]]*\]/g)].map((m) => m[1].toLowerCase());
+      return tags.every((t) => INLINE_TAGS.includes(t) || t === "text");
+    };
+
+    const lines = inputText.split(NEWLINE);
+    const wrappedLines = [];
+    let buffer = [];
+    let tagBuffer = null;
+    let insideBlock = false;
+
+    const flush = () => {
+      if (buffer.length) {
+        const joined = buffer.join(NEWLINE);
+        wrappedLines.push(insideBlock || joined.startsWith("[text]") ? joined : `[text]${joined}[/text]`);
+        buffer = [];
+      }
+    };
+
+    const openTagRegex = new RegExp(`^\\[(${RECURSIVE_BLOCK_TAGS.join("|")})(=.*)?$`, "i");
+    const closeTagRegex = new RegExp(`^\\[\\/(${RECURSIVE_BLOCK_TAGS.join("|")})\\]$`, "i");
+
+    for (let line of lines) {
+      const trimmed = line.trim();
+
+      if (tagBuffer) {
+        tagBuffer += NEWLINE + line;
+        if (trimmed.endsWith("]")) {
+          flush();
+          wrappedLines.push(tagBuffer);
+          insideBlock = true;
+          tagBuffer = null;
+        }
+        continue;
+      }
+
+      if (openTagRegex.test(trimmed) && !trimmed.endsWith("]")) {
+        tagBuffer = line;
+      } else if (openTagRegex.test(trimmed)) {
+        flush();
+        wrappedLines.push(line);
+        insideBlock = true;
+      } else if (closeTagRegex.test(trimmed)) {
+        flush();
+        wrappedLines.push(line);
+        insideBlock = false;
+      } else if (trimmed === "") {
+        flush();
+        wrappedLines.push("");
+      } else if (!insideBlock && isInlineOnly(trimmed)) {
+        buffer.push(line);
+      } else {
+        flush();
+        wrappedLines.push(line);
+      }
+    }
+
+    flush();
+    return wrappedLines.join(NEWLINE).replaceAll(NEWLINE, "\n");
+  }
+
   setRules(templateRules) {
     this.rules = templateRules.map((rule) => {
       const tagMatch = rule.template.match(/^\[([a-z0-9*]+)(.*?)\](.*?)$/i);
@@ -249,7 +326,7 @@ class EZPZ_BBCode_Parser {
         const api = {
           node,
           parent: context.parent ?? null,
-          root: context.root ?? node,
+          tree: context.root.children,
           position,
         };
 
@@ -364,8 +441,11 @@ class EZPZ_BBCode_Parser {
     return "";
   }
 
-  parse(inputText) {
-    const tokens = this.tokenize(inputText);
+  parse(inputText, wrapText = false) {
+    let raw = inputText;
+    if (wrapText) raw = this.wrapNodeText(raw);
+
+    const tokens = this.tokenize(raw);
     const errors = [];
     const tree = this.buildTree(tokens, errors);
     const html = this.renderNode(tree, { errors });
