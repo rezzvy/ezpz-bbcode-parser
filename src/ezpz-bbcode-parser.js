@@ -198,6 +198,7 @@ class EZPZ_BBCode_Parser {
             value: token.value,
             children: [],
             position: token.position,
+            closingPosition: null,
           };
           current.children.push(node);
           stack.push({ node, token });
@@ -205,6 +206,7 @@ class EZPZ_BBCode_Parser {
       } else if (token.type === "tag-close") {
         const top = stack[stack.length - 1];
         if (stack.length > 1 && top.node.name === token.name) {
+          top.node.closingPosition = token.position;
           stack.pop();
         } else {
           current.children.push({
