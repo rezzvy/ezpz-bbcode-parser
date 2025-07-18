@@ -318,7 +318,8 @@ class EZPZ_BBCode_Parser {
 
       const variables = {};
       for (let varName of rule.attrNames) {
-        variables[varName] = node.value ?? "";
+        const parsedAttr = this.parse(node.value ?? "").html;
+        variables[varName] = parsedAttr;
       }
 
       for (let varName of rule.contentNames) {
