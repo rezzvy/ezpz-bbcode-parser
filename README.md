@@ -149,12 +149,18 @@ Replace all BBCode rules at once.
 
 - `rules`: Array of rule objects
 
-#### `parse(inputText, wrapText = false)`
+#### `parse()` Method
+
+```js
+parse(inputText, (options = { wrapText: false, strictUnknownTag: true, strictClosingTag: false }));
+```
 
 Parse BBCode input into HTML and metadata.
 
 - `inputText`: `string` — Raw BBCode input
-- `wrapText`: `boolean` — Wrap loose text in `[text]...[/text]`
+- `wrapText`: `boolean` — Automatically wrap loose text in `[text]...[/text]`
+- `strictUnknownTag`: `boolean` — Strict mode for unknown tags
+- `strictClosingTag`: `boolean` — Strict mode for closing tags
 
 Returns:
 
@@ -167,6 +173,50 @@ Returns:
   raw: ""
 }
 ```
+
+##### Strict Mode Options
+
+##### `strictUnknownTag`
+
+- **true**: Unknown tags will be **excluded** from output.
+
+  - If the tag contains only text or known inner tags → the content is rendered.
+  - If it contains unknown inner tags → it’s removed and an `unknown-tag` error is reported.
+
+- **false**: Unknown tags are treated as **plain text**, and no error is added.
+
+Example:
+
+```js
+const result = parser.parse("[weird]hello[/weird]", { strictUnknownTag: true });
+console.log(result.errors); // Contains error for unknown tag
+```
+
+#### `strictClosingTag`
+
+- **true**: If a tag is opened but never closed (including any of its nested children), the entire tag including all its contents will be treated as **plain text**.  
+  An `unclosed-tag` error will be added to the `errors` array.
+
+- **false**: If a tag is opened but not closed, it will be **automatically closed** at the end of the input or before its parent closes.  
+  This allows malformed BBCode to still render as valid HTML.
+
+##### Example 1 — `strictClosingTag: true`
+
+```js
+const result = parser.parse("[b]bold", { strictClosingTag: true });
+console.log(result.output); // => "[b]bold"
+```
+
+> The `[b]` tag is unclosed, so it renders as plain text instead of bold text.
+
+##### Example 2 — `strictClosingTag: false`
+
+```js
+const result = parser.parse("[b]bold", { strictClosingTag: false });
+console.log(result.output); // => "<strong>bold</strong>"
+```
+
+> The `[b]` tag is auto-closed, and renders properly.
 
 #### `forbidden(registerFn)`
 

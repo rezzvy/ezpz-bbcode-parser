@@ -55,13 +55,16 @@ class EZPZ_BBCode_Parser {
     });
   }
 
-  parse(inputText, wrapText = false) {
+  parse(inputText, options = { wrapText: false, strictUnknownTag: true, strictClosingTag: false }) {
     if (typeof inputText !== "string") {
       throw new TypeError("parse() expects the first argument to be a string.");
     }
-    if (typeof wrapText !== "boolean") {
-      throw new TypeError("parse() expects the second argument to be a boolean.");
+
+    if (typeof options !== "object" || options === null) {
+      options = {};
     }
+
+    const { wrapText = false, strictUnknownTag = true, strictClosingTag = false } = options;
 
     let raw = inputText;
     if (wrapText) raw = this.#wrapNodeText(raw);
@@ -69,8 +72,9 @@ class EZPZ_BBCode_Parser {
     const errors = [];
 
     const tokens = this.#tokenize(raw);
-    const tree = this.#buildTree(tokens, errors);
-    const output = this.#renderNode(tree, { errors });
+    const tree = this.#buildTree(tokens, errors, strictClosingTag);
+
+    const output = this.#renderNode(tree, { errors }, strictUnknownTag, strictClosingTag);
 
     return { output, errors, tokens, tree, raw };
   }
@@ -229,7 +233,7 @@ class EZPZ_BBCode_Parser {
     return tokens;
   }
 
-  #buildTree(tokens, errors = []) {
+  #buildTree(tokens, errors = [], strictClosingTag = false) {
     const root = { type: "root", children: [] };
     const stack = [{ node: root, token: null }];
 
@@ -272,55 +276,113 @@ class EZPZ_BBCode_Parser {
           stack.push({ node, token });
         }
       } else if (token.type === "tag-close") {
-        const top = stack[stack.length - 1];
-        if (stack.length > 1 && top.node.name === token.name) {
-          top.node.closingPosition = token.position;
-          stack.pop();
-        } else {
-          current.children.push({
-            type: "text",
-            content: `[/${token.name}]`,
-            position: token.position,
-          });
+        if (!strictClosingTag) {
+          let matchedIndex = -1;
+          for (let j = stack.length - 1; j >= 1; j--) {
+            if (stack[j].node.name === token.name) {
+              matchedIndex = j;
+              break;
+            }
+          }
 
-          errors?.push({
-            errorType: "unexpected-closing",
-            node: {
-              current: {
-                children: null,
-                closingPosition: null,
-                name: token.name,
-                position: token.position,
-                type: "tag",
-                value: null,
+          if (matchedIndex !== -1) {
+            const matched = stack[matchedIndex];
+            matched.node.closingPosition = token.position;
+
+            stack.splice(matchedIndex);
+          } else {
+            current.children.push({
+              type: "text",
+              content: `[/${token.name}]`,
+              position: token.position,
+            });
+
+            errors?.push({
+              errorType: "unexpected-closing",
+              node: {
+                current: {
+                  children: null,
+                  closingPosition: null,
+                  name: token.name,
+                  position: token.position,
+                  type: "tag",
+                  value: null,
+                },
               },
-            },
-            pointer: null,
-          });
+              pointer: null,
+            });
+          }
+        } else {
+          const top = stack[stack.length - 1];
+          if (stack.length > 1 && top.node.name === token.name) {
+            top.node.closingPosition = token.position;
+            stack.pop();
+          } else {
+            current.children.push({
+              type: "text",
+              content: `[/${token.name}]`,
+              position: token.position,
+            });
+
+            errors?.push({
+              errorType: "unexpected-closing",
+              node: {
+                current: {
+                  children: null,
+                  closingPosition: null,
+                  name: token.name,
+                  position: token.position,
+                  type: "tag",
+                  value: null,
+                },
+              },
+              pointer: null,
+            });
+          }
         }
       }
     }
 
-    for (let i = stack.length - 1; i >= 1; i--) {
-      const { node } = stack[i];
+    if (strictClosingTag) {
+      for (let i = stack.length - 1; i >= 1; i--) {
+        const { node } = stack[i];
 
-      errors?.push({
-        errorType: "unclosed-tag",
-        node: {
-          current: node,
-          parent: null,
-          root: null,
-          next: null,
-          previous: null,
-        },
-        pointer: null,
-      });
+        const parent = stack[i - 1].node;
+        const index = parent.children.indexOf(node);
+        if (index !== -1) {
+          const rawTag =
+            `[${node.name}${node.value ? "=" + node.value : ""}]` +
+            node.children
+              .map((child) => {
+                if (child.type === "text") return child.content;
+                return this.#renderNode(child, {}, true, false); // Render child sebagai text
+              })
+              .join("");
+          parent.children[index] = {
+            type: "text",
+            content: rawTag,
+            position: node.position,
+          };
+        }
+
+        errors?.push({
+          errorType: "unclosed-tag",
+          node: {
+            current: node,
+            parent: null,
+            root: null,
+            next: null,
+            previous: null,
+          },
+          pointer: null,
+        });
+      }
     }
 
     return root;
   }
 
-  #renderNode(node, context = {}) {
+  #renderNode(node, context = {}, strictUnknownTag = true, strictClosingTag = false) {
     if (node.type === "text") {
       if (typeof this.#lineBreakTemplate === "function") {
         const position = {
@@ -364,26 +426,32 @@ class EZPZ_BBCode_Parser {
     if (node.type === "tag") {
       const rule = this.#rules.find((r) => r.name === node.name);
 
+      const inner = node.children.map((child) => this.#renderNode(child, context)).join("");
+      const attr = node.value ? "=" + node.value : "";
+
       if (!rule) {
-        const position = {
-          index: context.index ?? 0,
-          depth: (context.path ?? "0").split(".").length - 1,
-          path: context.path ?? "0",
-        };
-        context.errors?.push({
-          errorType: "unknown-tag",
-          node: {
-            current: node,
-            parent: context.parent ?? null,
-            root: context.root ?? node,
-            next: context.root?.children?.[context.index + 1] ?? null,
-            previous: context.root?.children?.[context.index - 1] ?? null,
-          },
-          pointer: position,
-        });
-        const inner = node.children.map((child) => this.#renderNode(child, context)).join("");
-        const attr = node.value ? "=" + node.value : "";
-        return `[${node.name}${attr}]${inner}[/${node.name}]`;
+        if (strictUnknownTag === true) {
+          const position = {
+            index: context.index ?? 0,
+            depth: (context.path ?? "0").split(".").length - 1,
+            path: context.path ?? "0",
+          };
+          context.errors?.push({
+            errorType: "unknown-tag",
+            node: {
+              current: node,
+              parent: context.parent ?? null,
+              root: context.root ?? node,
+              next: context.root?.children?.[context.index + 1] ?? null,
+              previous: context.root?.children?.[context.index - 1] ?? null,
+            },
+            pointer: position,
+          });
+
+          return inner;
+        }
+
+        return `[${node.name}${attr}]${inner}${node.closingPosition ? `[/${node.name}]` : ""}`;
       }
 
       const innerHTML = node.children
@@ -457,13 +525,18 @@ class EZPZ_BBCode_Parser {
     if (node.type === "root") {
       return node.children
         .map((c, i) =>
-          this.#renderNode(c, {
-            index: i,
-            path: `${i}`,
-            parent: null,
-            root: node,
-            errors: context.errors ?? [],
-          })
+          this.#renderNode(
+            c,
+            {
+              index: i,
+              path: `${i}`,
+              parent: null,
+              root: node,
+              errors: context.errors ?? [],
+            },
+            strictUnknownTag,
+            strictClosingTag
+          )
         )
         .join("");
     }
