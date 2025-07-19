@@ -323,19 +323,32 @@ class EZPZ_BBCode_Parser {
           depth: (context.path ?? "0").split(".").length - 1,
         };
 
+        let lines = node.content.split("\n");
+
+        const isAllNewlines = lines.every((l) => l.trim() === "");
+
+        if (isAllNewlines && lines.length > 1) {
+          lines.pop();
+        }
+
+        const index = context.index ?? 0;
+        const siblings = context.root?.children ?? [];
+
         const api = {
           node,
           parent: context.parent ?? null,
-          tree: context.root.children,
+          tree: siblings,
           position,
+          prevTree: siblings[index - 1] ?? null,
+          nextTree: siblings[index + 1] ?? null,
         };
 
-        return node.content
-          .split("\n")
-          .map((line, index, arr) => {
-            if (index < arr.length - 1) {
+        return lines
+          .map((line, index) => {
+            if (index < lines.length - 1) {
               return line + this.lineBreakTemplate(api);
             }
+
             return line;
           })
           .join("");
