@@ -204,6 +204,14 @@ class EZPZ_BBCode_Parser {
         if (tag) {
           tokens.push(tag);
           continue;
+        } else {
+          tokens.push({
+            type: "text",
+            content: "[",
+            position: { start: pos, end: pos + 1 },
+          });
+          pos += 1;
+          continue;
         }
       }
 
