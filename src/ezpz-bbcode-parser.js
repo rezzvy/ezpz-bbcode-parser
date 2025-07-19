@@ -97,8 +97,7 @@ class EZPZ_BBCode_Parser {
 
       return {
         name,
-        html: rule.html,
-        api: rule.api ?? null,
+        render: rule.render,
         attrNames,
         contentNames,
         fullVars: [...new Set([...attrNames, ...contentNames])],
@@ -291,23 +290,38 @@ class EZPZ_BBCode_Parser {
             content: `[/${token.name}]`,
             position: token.position,
           });
+
           errors?.push({
-            message: `Unexpected closing tag: [/${token.name}]`,
-            type: "unexpected-closing",
-            tag: token.name,
-            position: token.position,
+            errorType: "unexpected-closing",
+            node: {
+              current: {
+                children: null,
+                closingPosition: null,
+                name: token.name,
+                position: token.position,
+                type: "tag",
+                value: null,
+              },
+            },
+            pointer: null,
           });
         }
       }
     }
 
     for (let i = stack.length - 1; i >= 1; i--) {
-      const { node, token } = stack[i];
+      const { node } = stack[i];
+
       errors?.push({
-        message: `Unclosed tag: [${node.name}]`,
-        type: "unclosed-tag",
-        tag: node.name,
-        position: token?.position ?? {},
+        errorType: "unclosed-tag",
+        node: {
+          current: node,
+          parent: null,
+          root: null,
+          next: null,
+          previous: null,
+        },
+        pointer: null,
       });
     }
 
@@ -331,16 +345,15 @@ class EZPZ_BBCode_Parser {
           lines.pop();
         }
 
-        const index = context.index ?? 0;
-        const siblings = context.root?.children ?? [];
-
         const api = {
-          node,
-          parent: context.parent ?? null,
-          tree: siblings,
-          position,
-          prevTree: siblings[index - 1] ?? null,
-          nextTree: siblings[index + 1] ?? null,
+          node: {
+            current: node,
+            parent: context.parent ?? null,
+            root: context.root ?? node,
+            next: context.root?.children?.[context.index + 1] ?? null,
+            previous: context.root?.children?.[context.index - 1] ?? null,
+          },
+          pointer: position,
         };
 
         return lines
@@ -366,10 +379,15 @@ class EZPZ_BBCode_Parser {
           path: context.path ?? "0",
         };
         context.errors?.push({
-          message: `Unknown tag: [${node.name}]`,
-          type: "unknown-tag",
-          tag: node.name,
-          position,
+          errorType: "unknown-tag",
+          node: {
+            current: node,
+            parent: context.parent ?? null,
+            root: context.root ?? node,
+            next: context.root?.children?.[context.index + 1] ?? null,
+            previous: context.root?.children?.[context.index - 1] ?? null,
+          },
+          pointer: position,
         });
         const inner = node.children.map((child) => this.renderNode(child, context)).join("");
         const attr = node.value ? "=" + node.value : "";
@@ -394,10 +412,14 @@ class EZPZ_BBCode_Parser {
       };
 
       const api = {
-        node,
-        parent: context.parent ?? null,
-        root: context.root ?? node,
-        position,
+        node: {
+          current: node,
+          parent: context.parent ?? null,
+          root: context.root ?? node,
+          next: context.root?.children?.[context.index + 1] ?? null,
+          previous: context.root?.children?.[context.index - 1] ?? null,
+        },
+        pointer: position,
       };
 
       const { messages, override } = this.checkForbidden(api);
@@ -416,18 +438,21 @@ class EZPZ_BBCode_Parser {
         variables[varName] = innerHTML.trim();
       }
 
-      if (typeof rule.api === "function") {
-        return rule.api({
+      if (typeof rule.render === "function") {
+        return rule.render({
+          node: {
+            current: node,
+            parent: context.parent ?? null,
+            root: context.root ?? node,
+            next: context.root?.children?.[context.index + 1] ?? null,
+            previous: context.root?.children?.[context.index - 1] ?? null,
+          },
+          pointer: position,
           variables,
-          node,
-          renderNode: (childNode) => this.renderNode(childNode, context),
-          parent: context.parent ?? null,
-          position,
-          root: context.root ?? node,
         });
       }
 
-      let renderedHtml = rule.html;
+      let renderedHtml = rule.render;
       for (let varName of rule.fullVars) {
         const val = variables[varName] ?? "";
         const regex = new RegExp(`\\$${varName}`, "g");
