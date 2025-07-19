@@ -1,135 +1,119 @@
 class EZPZ_BBCode_Parser {
+  #rules = [];
+  #forbiddenRules = [];
+  #lineBreakTemplate = null;
+
+  #textWrapTags = {
+    inline: ["b", "i", "s", "u", "link", "c", "spoiler", "img", "size", "color"],
+    recursive: ["box", "quote", "notice", "centre", "spoilerbox"],
+  };
+
   constructor(templateRules = []) {
-    this.setRules(templateRules);
-    this.forbiddenRules = [];
-
-    this.lineBreakTemplate = null;
-  }
-
-  wrapNodeText(inputText, inlineTags, recursiveBlockTags) {
-    const INLINE_TAGS = inlineTags || ["b", "i", "u", "s", "url", "img", "color", "size"];
-    const RECURSIVE_BLOCK_TAGS = recursiveBlockTags || ["spoiler", "quote", "notice", "centre", "box"];
-
-    const NEWLINE = "<<<NEWLINE>>>";
-    inputText = inputText.replace(/\r?\n/g, NEWLINE);
-
-    const blockTagRegex = new RegExp(`\\[(${RECURSIVE_BLOCK_TAGS.join("|")})(=([^\\[\\]]|\\[[^\\[\\]]*\\])*)?\\]([\\s\\S]*?)\\[\\/\\1\\]`, "gi");
-
-    // Recursively wrap block tag content
-    inputText = inputText.replace(blockTagRegex, (_, tag, attr = "", __, content) => {
-      const inner = this.wrapNodeText(content.replaceAll(NEWLINE, "\n"), INLINE_TAGS, RECURSIVE_BLOCK_TAGS);
-      return `[${tag}${attr}]${inner}[/${tag}]`;
-    });
-
-    const isInlineOnly = (line) => {
-      if (!line.trim() || /^\s*\[\*\]/.test(line)) return false;
-      const tags = [...line.matchAll(/\[\/?([a-zA-Z0-9*]+)[^\]]*\]/g)].map((m) => m[1].toLowerCase());
-      return tags.every((t) => INLINE_TAGS.includes(t) || t === "text");
-    };
-
-    const lines = inputText.split(NEWLINE);
-    const wrappedLines = [];
-    let buffer = [];
-    let tagBuffer = null;
-    let insideBlock = false;
-
-    const flush = () => {
-      if (buffer.length) {
-        const joined = buffer.join(NEWLINE);
-        wrappedLines.push(insideBlock || joined.startsWith("[text]") ? joined : `[text]${joined}[/text]`);
-        buffer = [];
-      }
-    };
-
-    const openTagRegex = new RegExp(`^\\[(${RECURSIVE_BLOCK_TAGS.join("|")})(=.*)?$`, "i");
-    const closeTagRegex = new RegExp(`^\\[\\/(${RECURSIVE_BLOCK_TAGS.join("|")})\\]$`, "i");
-
-    for (let line of lines) {
-      const trimmed = line.trim();
-
-      if (tagBuffer) {
-        tagBuffer += NEWLINE + line;
-        if (trimmed.endsWith("]")) {
-          flush();
-          wrappedLines.push(tagBuffer);
-          insideBlock = true;
-          tagBuffer = null;
-        }
-        continue;
-      }
-
-      if (openTagRegex.test(trimmed) && !trimmed.endsWith("]")) {
-        tagBuffer = line;
-      } else if (openTagRegex.test(trimmed)) {
-        flush();
-        wrappedLines.push(line);
-        insideBlock = true;
-      } else if (closeTagRegex.test(trimmed)) {
-        flush();
-        wrappedLines.push(line);
-        insideBlock = false;
-      } else if (trimmed === "") {
-        flush();
-        wrappedLines.push("");
-      } else if (!insideBlock && isInlineOnly(trimmed)) {
-        buffer.push(line);
-      } else {
-        flush();
-        wrappedLines.push(line);
-      }
+    if (!Array.isArray(templateRules)) {
+      throw new TypeError("templateRules must be an array.");
     }
 
-    flush();
-    return wrappedLines.join(NEWLINE).replaceAll(NEWLINE, "\n");
+    this.setRules(templateRules);
+  }
+
+  // Setter
+
+  set lineBreakTemplate(fn) {
+    if (typeof fn !== "function") {
+      throw new TypeError("lineBreakTemplate must be a function.");
+    }
+    this.#lineBreakTemplate = fn;
+  }
+
+  set textWrapTags(obj) {
+    if (typeof obj !== "object" || !Array.isArray(obj.inline) || !Array.isArray(obj.recursive)) {
+      throw new TypeError("textWrapTags must be an object with 'inline' and 'recursive' arrays.");
+    }
+    this.#textWrapTags.inline = obj.inline;
+    this.#textWrapTags.recursive = obj.recursive;
+  }
+
+  // Public Method
+
+  addRule(rule) {
+    if (!rule || typeof rule !== "object") {
+      throw new TypeError("addRule expects a rule object.");
+    }
+    this.#rules.push(this.#validateRule(rule));
   }
 
   setRules(templateRules) {
-    this.rules = templateRules.map((rule) => {
-      const tagMatch = rule.template.match(/^\[([a-z0-9*]+)(.*?)\](.*?)$/i);
-      if (!tagMatch) throw new Error("Invalid template format");
+    if (!Array.isArray(templateRules)) {
+      throw new TypeError("setRules expects an array of rule objects.");
+    }
 
-      const name = rule.name || tagMatch[1].toLowerCase();
-      const attrPart = tagMatch[2];
-      const contentPart = tagMatch[3];
-
-      const attrNames = [...attrPart.matchAll(/\$([a-zA-Z0-9_]+)/g)].map((m) => m[1]);
-      const contentNames = [...contentPart.matchAll(/\$([a-zA-Z0-9_]+)/g)].map((m) => m[1]);
-
-      return {
-        name,
-        render: rule.render,
-        attrNames,
-        contentNames,
-        fullVars: [...new Set([...attrNames, ...contentNames])],
-      };
+    this.#rules = templateRules.map((rule) => {
+      if (!rule || typeof rule !== "object") {
+        throw new TypeError("Each rule must be an object.");
+      }
+      return this.#validateRule(rule);
     });
   }
 
+  parse(inputText, wrapText = false) {
+    if (typeof inputText !== "string") {
+      throw new TypeError("parse() expects the first argument to be a string.");
+    }
+    if (typeof wrapText !== "boolean") {
+      throw new TypeError("parse() expects the second argument to be a boolean.");
+    }
+
+    let raw = inputText;
+    if (wrapText) raw = this.#wrapNodeText(raw);
+
+    const errors = [];
+
+    const tokens = this.#tokenize(raw);
+    const tree = this.#buildTree(tokens, errors);
+    const output = this.#renderNode(tree, { errors });
+
+    return { output, errors, tokens, tree, raw };
+  }
+
   forbidden(registerFn) {
+    if (typeof registerFn !== "function") {
+      throw new TypeError("forbidden() expects a function.");
+    }
+
     const rules = [];
     const check = (fn, msg = "This is forbidden.") => {
+      if (typeof fn !== "function") {
+        throw new TypeError("Forbidden check function must be a function.");
+      }
+
       const rule = { fn, msg, handler: null };
       const then = (handlerFn) => {
+        if (typeof handlerFn !== "function") {
+          throw new TypeError("Forbidden 'then' handler must be a function.");
+        }
         rule.handler = handlerFn;
         return undefined;
       };
+
       rules.push(rule);
       return { then };
     };
+
     registerFn(check);
-    this.forbiddenRules.push(...rules);
+    this.#forbiddenRules.push(...rules);
   }
 
-  checkForbidden(api) {
+  // Private Parser Methods
+
+  #checkForbidden(api) {
     const messages = [];
     let override = null;
-    for (const { fn, msg, handler } of this.forbiddenRules) {
+    for (const { fn, msg, handler } of this.#forbiddenRules) {
       if (fn(api)) {
         messages.push({
+          errorType: "forbidden",
           message: msg,
-          type: "forbidden",
-          tag: api.node?.name,
-          position: api.position ?? {},
+          ...api,
         });
         if (typeof handler === "function") {
           const result = handler(api);
@@ -142,7 +126,7 @@ class EZPZ_BBCode_Parser {
     return { messages, override };
   }
 
-  tokenize(input) {
+  #tokenize(input) {
     const tokens = [];
     let pos = 0;
 
@@ -237,7 +221,7 @@ class EZPZ_BBCode_Parser {
     return tokens;
   }
 
-  buildTree(tokens, errors = []) {
+  #buildTree(tokens, errors = []) {
     const root = { type: "root", children: [] };
     const stack = [{ node: root, token: null }];
 
@@ -328,9 +312,9 @@ class EZPZ_BBCode_Parser {
     return root;
   }
 
-  renderNode(node, context = {}) {
+  #renderNode(node, context = {}) {
     if (node.type === "text") {
-      if (typeof this.lineBreakTemplate === "function") {
+      if (typeof this.#lineBreakTemplate === "function") {
         const position = {
           index: context.index ?? 0,
           path: context.path ?? "0",
@@ -359,7 +343,7 @@ class EZPZ_BBCode_Parser {
         return lines
           .map((line, index) => {
             if (index < lines.length - 1) {
-              return line + this.lineBreakTemplate(api);
+              return line + this.#lineBreakTemplate(api);
             }
 
             return line;
@@ -370,7 +354,7 @@ class EZPZ_BBCode_Parser {
     }
 
     if (node.type === "tag") {
-      const rule = this.rules.find((r) => r.name === node.name);
+      const rule = this.#rules.find((r) => r.name === node.name);
 
       if (!rule) {
         const position = {
@@ -389,14 +373,14 @@ class EZPZ_BBCode_Parser {
           },
           pointer: position,
         });
-        const inner = node.children.map((child) => this.renderNode(child, context)).join("");
+        const inner = node.children.map((child) => this.#renderNode(child, context)).join("");
         const attr = node.value ? "=" + node.value : "";
         return `[${node.name}${attr}]${inner}[/${node.name}]`;
       }
 
       const innerHTML = node.children
         .map((c, i) =>
-          this.renderNode(c, {
+          this.#renderNode(c, {
             ...context,
             index: i,
             path: (context.path ?? "") + "." + i,
@@ -422,7 +406,7 @@ class EZPZ_BBCode_Parser {
         pointer: position,
       };
 
-      const { messages, override } = this.checkForbidden(api);
+      const { messages, override } = this.#checkForbidden(api);
       if (messages.length > 0) {
         context.errors?.push(...messages);
         return override ?? "";
@@ -430,7 +414,7 @@ class EZPZ_BBCode_Parser {
 
       const variables = {};
       for (let varName of rule.attrNames) {
-        const parsedAttr = this.parse(node.value ?? "").html;
+        const parsedAttr = this.parse(node.value ?? "").output;
         variables[varName] = parsedAttr;
       }
 
@@ -465,7 +449,7 @@ class EZPZ_BBCode_Parser {
     if (node.type === "root") {
       return node.children
         .map((c, i) =>
-          this.renderNode(c, {
+          this.#renderNode(c, {
             index: i,
             path: `${i}`,
             parent: null,
@@ -479,15 +463,102 @@ class EZPZ_BBCode_Parser {
     return "";
   }
 
-  parse(inputText, wrapText = false) {
-    let raw = inputText;
-    if (wrapText) raw = this.wrapNodeText(raw);
+  // Helper Methods
 
-    const tokens = this.tokenize(raw);
-    const errors = [];
-    const tree = this.buildTree(tokens, errors);
-    const html = this.renderNode(tree, { errors });
-    return { html, errors, tree };
+  #validateRule(rule) {
+    const tagMatch = rule.template.match(/^\[([a-z0-9*]+)(.*?)\](.*?)$/i);
+    if (!tagMatch) throw new Error("Invalid template format");
+
+    const name = rule.name || tagMatch[1].toLowerCase();
+    const attrPart = tagMatch[2];
+    const contentPart = tagMatch[3];
+
+    const attrNames = [...attrPart.matchAll(/\$([a-zA-Z0-9_]+)/g)].map((m) => m[1]);
+    const contentNames = [...contentPart.matchAll(/\$([a-zA-Z0-9_]+)/g)].map((m) => m[1]);
+
+    return {
+      name,
+      render: rule.render,
+      attrNames,
+      contentNames,
+      fullVars: [...new Set([...attrNames, ...contentNames])],
+    };
+  }
+
+  #wrapNodeText(inputText) {
+    const INLINE_TAGS = this.#textWrapTags.inline;
+    const RECURSIVE_BLOCK_TAGS = this.#textWrapTags.recursive;
+
+    const NEWLINE = "<<<NEWLINE>>>";
+    inputText = inputText.replace(/\r?\n/g, NEWLINE);
+
+    const blockTagRegex = new RegExp(`\\[(${RECURSIVE_BLOCK_TAGS.join("|")})(=([^\\[\\]]|\\[[^\\[\\]]*\\])*)?\\]([\\s\\S]*?)\\[\\/\\1\\]`, "gi");
+
+    inputText = inputText.replace(blockTagRegex, (_, tag, attr = "", __, content) => {
+      const inner = this.#wrapNodeText(content.replaceAll(NEWLINE, "\n"), INLINE_TAGS, RECURSIVE_BLOCK_TAGS);
+      return `[${tag}${attr}]${inner}[/${tag}]`;
+    });
+
+    const isInlineOnly = (line) => {
+      if (!line.trim() || /^\s*\[\*\]/.test(line)) return false;
+      const tags = [...line.matchAll(/\[\/?([a-zA-Z0-9*]+)[^\]]*\]/g)].map((m) => m[1].toLowerCase());
+      return tags.every((t) => INLINE_TAGS.includes(t) || t === "text");
+    };
+
+    const lines = inputText.split(NEWLINE);
+    const wrappedLines = [];
+    let buffer = [];
+    let tagBuffer = null;
+    let insideBlock = false;
+
+    const flush = () => {
+      if (buffer.length) {
+        const joined = buffer.join(NEWLINE);
+        wrappedLines.push(insideBlock || joined.startsWith("[text]") ? joined : `[text]${joined}[/text]`);
+        buffer = [];
+      }
+    };
+
+    const openTagRegex = new RegExp(`^\\[(${RECURSIVE_BLOCK_TAGS.join("|")})(=.*)?$`, "i");
+    const closeTagRegex = new RegExp(`^\\[\\/(${RECURSIVE_BLOCK_TAGS.join("|")})\\]$`, "i");
+
+    for (let line of lines) {
+      const trimmed = line.trim();
+
+      if (tagBuffer) {
+        tagBuffer += NEWLINE + line;
+        if (trimmed.endsWith("]")) {
+          flush();
+          wrappedLines.push(tagBuffer);
+          insideBlock = true;
+          tagBuffer = null;
+        }
+        continue;
+      }
+
+      if (openTagRegex.test(trimmed) && !trimmed.endsWith("]")) {
+        tagBuffer = line;
+      } else if (openTagRegex.test(trimmed)) {
+        flush();
+        wrappedLines.push(line);
+        insideBlock = true;
+      } else if (closeTagRegex.test(trimmed)) {
+        flush();
+        wrappedLines.push(line);
+        insideBlock = false;
+      } else if (trimmed === "") {
+        flush();
+        wrappedLines.push("");
+      } else if (!insideBlock && isInlineOnly(trimmed)) {
+        buffer.push(line);
+      } else {
+        flush();
+        wrappedLines.push(line);
+      }
+    }
+
+    flush();
+    return wrappedLines.join(NEWLINE).replaceAll(NEWLINE, "\n");
   }
 }
 
