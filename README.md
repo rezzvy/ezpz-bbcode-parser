@@ -104,6 +104,14 @@ parser.lineBreakTemplate = (api) => {
 
 ## Documentation
 
+### Escaping Brackets
+
+When you need to write a literal tag, you can use `\\` before the opening tag and before the closing tag, like this:
+
+```js
+const raw = "[b]This is how you write a \\[b]bold\\[/b] tag[/b]";
+```
+
 ### Placeholder Variables
 
 In your `template` and `render` definitions, you can use placeholders like `$content`, `$text`, or `$title`. The parser will automatically extract and fill in these variables during rendering.

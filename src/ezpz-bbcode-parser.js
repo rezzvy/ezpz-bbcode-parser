@@ -134,6 +134,11 @@ class EZPZ_BBCode_Parser {
     const tokens = [];
     let pos = 0;
 
+    const ESCAPED_OPEN = "<<<TAKE_ME_AWAY>>>";
+    input = input.replace(/\\\\\[/g, ESCAPED_OPEN);
+
+    console.log(input);
+
     const readTag = () => {
       if (input[pos] !== "[") return null;
       let i = pos + 1;
@@ -228,6 +233,12 @@ class EZPZ_BBCode_Parser {
         position: { start: pos, end: next },
       });
       pos = next;
+    }
+
+    for (const token of tokens) {
+      if (token.type === "text") {
+        token.content = token.content.replace(new RegExp(ESCAPED_OPEN, "g"), "[");
+      }
     }
 
     return tokens;
