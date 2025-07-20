@@ -66,11 +66,10 @@ class EZPZ_BBCode_Parser {
 
     const { wrapText = false, strictUnknownTag = true, strictClosingTag = false } = options;
 
-    let raw = inputText;
+    let raw = this.escapeHTML(inputText);
     if (wrapText) raw = this.#wrapNodeText(raw);
 
     const errors = [];
-
     const tokens = this.#tokenize(raw);
     const tree = this.#buildTree(tokens, errors, strictClosingTag);
 
@@ -134,10 +133,8 @@ class EZPZ_BBCode_Parser {
     const tokens = [];
     let pos = 0;
 
-    const ESCAPED_OPEN = "<<<TAKE_ME_AWAY>>>";
+    const ESCAPED_OPEN = "___TAKE_ME_AWAY___";
     input = input.replace(/\\\\\[/g, ESCAPED_OPEN);
-
-    console.log(input);
 
     const readTag = () => {
       if (input[pos] !== "[") return null;
@@ -651,6 +648,10 @@ class EZPZ_BBCode_Parser {
 
     flush();
     return wrappedLines.join(NEWLINE).replaceAll(NEWLINE, "\n");
+  }
+
+  escapeHTML(str) {
+    return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
   }
 }
 
